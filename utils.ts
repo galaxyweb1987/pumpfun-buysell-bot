@@ -11,7 +11,6 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import axios from "axios";
-import { SOL_BUY_MAX, SOL_BUY_MIN } from "./constants";
 import bs58 from "bs58";
 import fs from "fs";
 import path from "path";
@@ -19,21 +18,58 @@ import {
   createTransferInstruction,
   getOrCreateAssociatedTokenAccount,
 } from "@solana/spl-token";
+import {
+  API_URL,
+  PRIORITY_FEE,
+  RPC_URL,
+  SLIPPAGE,
+  SOL_BUY_MAX,
+  SOL_BUY_MIN,
+} from "./constants";
+
+const connection = new Connection(RPC_URL, "confirmed");
 
 export type WalletInfoType = {
   privateKey: string;
   publicKey: string;
 };
 
-export async function getWalletBalance(
-  connection: Connection,
-  publicKey: string
-): Promise<number> {
-  try {
-    // Get the SOL balance of the wallet
-    const balance = await connection.getBalance(new PublicKey(publicKey));
+export type PausedWalletInfoType = {
+  privateKey: string;
+  publicKey: string;
+  amount: number;
+};
 
-    // Convert lamports to sol and show only 2 decimals
+// Get the number of decimals for a given token to accurately handle token amounts.
+async function getNumberDecimals(mintAddress: PublicKey): Promise<number> {
+  try {
+    const info = await connection.getParsedAccountInfo(mintAddress);
+    const decimals = (info.value?.data as ParsedAccountData).parsed.info
+      .decimals as number;
+    console.log(`Token Decimals: ${decimals}`);
+    return decimals;
+  } catch (err) {
+    console.error("Error in getting number decimal: ", err);
+    return 9;
+  }
+}
+
+export async function getSolPrice() {
+  try {
+    // Get the current price of SOL from CoinGecko API
+    const { data } = await axios.get(
+      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
+    );
+    return data.solana.usd;
+  } catch (err) {
+    console.error("Error getting SOL price:", err);
+    throw err;
+  }
+}
+
+export async function getWalletBalance(publicKey: string): Promise<number> {
+  try {
+    const balance = await connection.getBalance(new PublicKey(publicKey));
     return balance / LAMPORTS_PER_SOL;
   } catch (err) {
     console.error("Error in getting wallet balance: ", err);
@@ -42,28 +78,42 @@ export async function getWalletBalance(
 }
 
 export async function getTokenBalance(
-  connection: Connection,
   walletAddress: PublicKey,
   tokenMintAddress: PublicKey
 ) {
   try {
-    return 0;
-  } catch (err) {
-    console.error("Error fetching token balance:", err);
-    throw err;
-  }
-}
+    const response = await axios({
+      url: RPC_URL,
+      method: "post",
+      headers: { "Content-Type": "application/json" },
+      data: [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getTokenAccountsByOwner",
+          params: [
+            walletAddress,
+            {
+              mint: tokenMintAddress,
+            },
+            {
+              encoding: "jsonParsed",
+            },
+          ],
+        },
+      ],
+    });
 
-export async function getSolPrice() {
-  try {
-    // Fetch the current price of SOL from CoinGecko API
-    const { data } = await axios.get(
-      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
-    );
-    return data.solana.usd;
+    const tokenAmount =
+      response?.data[0]?.result?.value[0]?.account?.data?.parsed?.info
+        ?.tokenAmount;
+    // uiAmount, decimals
+    console.log("==========amount");
+    console.log(tokenAmount.uiAmount);
+    return tokenAmount ? tokenAmount.uiAmount : 0;
   } catch (err) {
-    console.error("Error fetching SOL price:", err);
-    throw err;
+    console.error("Error in getting token balance:", err);
+    return 0;
   }
 }
 
@@ -81,8 +131,8 @@ export async function getWalletsFromFile() {
     const wallets = fs.readFileSync(walletsFile, "utf8");
     return JSON.parse(wallets);
   } catch (err) {
-    console.error('Error in reading from file: ', err);
-    return {};
+    console.error("Error in reading from wallets file: ", err);
+    return [];
   }
 }
 
@@ -93,7 +143,29 @@ export async function storeWalletsToFile(wallets: WalletInfoType[]) {
 
     console.log(`Wallets generated and saved to ${walletsFile}`);
   } catch (err) {
-    console.error('Error in writing to file: ', err);
+    console.error("Error in writing to wallets file: ", err);
+  }
+}
+
+export async function getPausedState() {
+  try {
+    const pausedFile = path.join(__dirname, "paused.json");
+    const wallets = fs.readFileSync(pausedFile, "utf8");
+    return JSON.parse(wallets);
+  } catch (err) {
+    console.error("Error in reading from paused wallets file: ", err);
+    return [];
+  }
+}
+
+export async function setPausedState(wallets: PausedWalletInfoType[]) {
+  try {
+    const pausedFile = path.join(__dirname, "paused.json");
+    fs.writeFileSync(pausedFile, JSON.stringify(wallets, null, 2));
+
+    console.log(`Paused process saved to ${pausedFile}`);
+  } catch (err) {
+    console.error("Error in writing to paused wallets file: ", err);
   }
 }
 
@@ -101,7 +173,10 @@ export function generateRandomAmounts(numberOfWallets: number) {
   const amounts = [];
   for (let index = 0; index < numberOfWallets; index++) {
     const randomAmount =
-      Math.random() * (SOL_BUY_MAX - SOL_BUY_MIN) + SOL_BUY_MIN;
+      Math.round(
+        (Math.random() * (SOL_BUY_MAX - SOL_BUY_MIN) + SOL_BUY_MIN) *
+          LAMPORTS_PER_SOL
+      ) / LAMPORTS_PER_SOL;
     amounts.push(randomAmount);
   }
 
@@ -109,7 +184,6 @@ export function generateRandomAmounts(numberOfWallets: number) {
 }
 
 export async function sendSolToWallet(
-  connection: Connection,
   fromPvtKey: string,
   toPubKey: PublicKey,
   amount: number
@@ -117,47 +191,38 @@ export async function sendSolToWallet(
   try {
     const transaction = new Transaction();
 
-    const srcPrivateKeyBuffer = Buffer.from(fromPvtKey.slice(2), "hex");
-    const fromWallet = Keypair.fromSecretKey(srcPrivateKeyBuffer);
+    const fromWallet = Keypair.fromSecretKey(bs58.decode(fromPvtKey));
 
     const sendSolInstruction = SystemProgram.transfer({
       fromPubkey: fromWallet.publicKey,
       toPubkey: toPubKey,
       lamports: LAMPORTS_PER_SOL * amount,
     });
-
     transaction.add(sendSolInstruction);
+
+    console.log("=============sendsolinstruction");
+    console.log(sendSolInstruction);
+    console.log("======================");
+    console.log(amount);
+    console.log(LAMPORTS_PER_SOL * amount);
+
+    console.log(`Sending ${amount} SOL from ${fromWallet.publicKey} to ${toPubKey}`);
+
     const transactionSignature = await sendAndConfirmTransaction(
       connection,
       transaction,
       [fromWallet]
     );
 
+    console.log("Waiting for the transaction finish...");
     console.log(`Transaction signature: ${transactionSignature}`);
   } catch (err) {
     console.error("Error occurred during transfer:", err);
-  }
-}
-
-// Fetches the number of decimals for a given token to accurately handle token amounts.
-export async function getNumberDecimals(
-  mintAddress: PublicKey,
-  connection: Connection
-): Promise<number> {
-  try {
-    const info = await connection.getParsedAccountInfo(mintAddress);
-    const decimals = (info.value?.data as ParsedAccountData).parsed.info
-      .decimals as number;
-    console.log(`Token Decimals: ${decimals}`);
-    return decimals;
-  } catch (err) {
-    console.error('Error in getting number decimal: ', err);
-    return 9;
+    throw err;
   }
 }
 
 export async function sendTokenToWallet(
-  connection: Connection,
   fromPvtKey: string,
   toPubKey: PublicKey,
   tokenAddress: string,
@@ -165,12 +230,11 @@ export async function sendTokenToWallet(
 ) {
   try {
     const tokenMintAddress = new PublicKey(tokenAddress);
-    const srcPrivateKeyBuffer = Buffer.from(fromPvtKey.slice(2), "hex");
-    const fromWallet = Keypair.fromSecretKey(srcPrivateKeyBuffer);
+    const fromWallet = Keypair.fromSecretKey(bs58.decode(fromPvtKey));
 
-    const decimals = await getNumberDecimals(tokenMintAddress, connection);
+    const decimals = await getNumberDecimals(tokenMintAddress);
 
-    // Creates or fetches the associated token accounts for the sender and receiver.
+    // Create or get the associated token accounts for the sender and receiver.
     let fromTokenAccount = await getOrCreateAssociatedTokenAccount(
       connection,
       fromWallet,
@@ -213,10 +277,10 @@ export async function sendTokenToWallet(
     }).compileToV0Message();
     const versionedTransaction = new VersionedTransaction(messageV0);
     versionedTransaction.sign([fromWallet]);
-    console.log("Transaction Signed. Preparing to send...");
-
+    
+    console.log(`Sending ${amount} token from ${fromWallet.publicKey} to ${toPubKey}`)
     const txid = await connection.sendTransaction(versionedTransaction, {
-      maxRetries: 20,
+      maxRetries: 5,
     });
     console.log(`Transaction Submitted: ${txid}`);
 
@@ -236,5 +300,156 @@ export async function sendTokenToWallet(
     );
   } catch (err) {
     console.error("Error in transferring SPL token: ", err);
+    throw err;
+  }
+}
+
+export async function getLatestTokenTransaction(tokenMintAddress: string) {
+  try {
+    const latestBlockhash = await connection.getLatestBlockhash();
+
+    console.log("=================latestblockhash");
+    console.log(latestBlockhash);
+
+    // Find all transactions that include this token
+    const tokenTransactionsLamportRange =
+      await connection.getSignaturesForAddress(
+        new PublicKey(tokenMintAddress),
+        { limit: 1 } //until: latestBlockhash.blockhash,
+      );
+
+    if (tokenTransactionsLamportRange.length > 0) {
+      const sortedTokenTransactions = tokenTransactionsLamportRange
+        .sort((a, b) => Number(b.signature) - Number(a.signature))
+        .slice(0, 1);
+
+      console.log("======================");
+      console.log(sortedTokenTransactions);
+
+      if (sortedTokenTransactions.length > 0) {
+        const latestTokenTransaction = await connection.getTransaction(
+          sortedTokenTransactions[0].signature,
+          { maxSupportedTransactionVersion: 0 }
+        );
+
+        console.log("Latest Token Transaction:", latestTokenTransaction);
+        console.log("=======================end of token transaction");
+        return latestTokenTransaction?.transaction?.signatures[0];
+      } else {
+        console.log("No token transactions were found.");
+      }
+    } else {
+      console.log("No token transactions were found.");
+    }
+  } catch (err) {
+    console.error(
+      "Error occurred during latest token transaction lookup:",
+      err
+    );
+  }
+}
+
+export async function placeBuyTrade(
+  tokenMint: any,
+  privateKey: string,
+  amount: number
+) {
+  const url = `${API_URL}/trade`;
+  const data = {
+    trade_type: "buy",
+    mint: tokenMint,
+    amount: amount,
+    slippage: SLIPPAGE,
+    priorityFee: PRIORITY_FEE,
+    userPrivateKey: privateKey,
+  };
+
+  try {
+    const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
+    console.log(`Placing buy order with ${amount} SOL on ${walletInfo.publicKey}...`);
+    const response = await axios.post(url, data);
+    // const response = await fetch(url, {
+    //   method: "POST",
+    //   headers: {
+    //     "Content-Type": "application/json",
+    //   },
+    //   body: JSON.stringify(data),
+    // });
+    const transactionId = response.data.tx_hash;
+    console.log(`Transaction ID: ${transactionId}`);
+
+    return transactionId;
+  } catch (err) {
+    console.error("Error in buying the token:", err);
+    return '';
+  }
+}
+
+export async function getSellTransaction(
+  tokenMint: any,
+  privateKey: string,
+  amount: any
+) {
+  const url = `${API_URL}/trade`;
+
+  const data = {
+    trade_type: "sell",
+    mint: tokenMint,
+    amount: amount,
+    slippage: SLIPPAGE,
+    priorityFee: PRIORITY_FEE,
+    userPrivateKey: privateKey,
+  };
+
+  console.log("before sell transaction=====================");
+  console.log(data);
+
+  const response = await axios.post(url, data);
+
+  try {
+    return response.data.transaction;
+  } catch (err) {
+    console.error("Error in creating sell transaction: ", err);
+    throw err;
+  }
+}
+
+export async function placeSellTrade(
+  owner: Keypair,
+  tokenMint: any,
+  privateKey: string,
+  amount: number
+) {
+  try {
+    const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
+
+    const encoded_tx: any = await getSellTransaction(
+      tokenMint,
+      privateKey,
+      amount
+    );
+
+    console.log("ENCODED TRANSACTION");
+    console.log(encoded_tx);
+
+    if (encoded_tx) {
+      const transaction = VersionedTransaction.deserialize(
+        bs58.decode(encoded_tx)
+      );
+      console.log(transaction);
+
+      console.log(`Placing sell order with ${amount} token on ${walletInfo.publicKey}`);
+      transaction.sign([owner]);
+      const txid = await connection.sendTransaction(transaction, {
+        skipPreflight: false,
+        maxRetries: 5,
+      });
+
+      console.log(`https://solscan.io/tx/${txid}`);
+    } else {
+      console.log("Transaction was not successful");
+    }
+  } catch (err) {
+    console.error("Error in selling the token back: ", err);
   }
 }
