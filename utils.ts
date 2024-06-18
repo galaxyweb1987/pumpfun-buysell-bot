@@ -1,46 +1,69 @@
-import { Connection, Keypair, LAMPORTS_PER_SOL, ParsedAccountData, PublicKey, SystemProgram, Transaction, TransactionMessage, VersionedTransaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import axios from 'axios';
-import { RPC_URL, SOL_BUY_MAX, SOL_BUY_MIN } from './constants';
-import bs58 from 'bs58';
-import fs from 'fs';
-import path from 'path';
-import { createTransferInstruction, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
+import {
+  Connection,
+  Keypair,
+  LAMPORTS_PER_SOL,
+  ParsedAccountData,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionMessage,
+  VersionedTransaction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
+import axios from "axios";
+import { SOL_BUY_MAX, SOL_BUY_MIN } from "./constants";
+import bs58 from "bs58";
+import fs from "fs";
+import path from "path";
+import {
+  createTransferInstruction,
+  getOrCreateAssociatedTokenAccount,
+} from "@solana/spl-token";
 
 export type WalletInfoType = {
   privateKey: string;
   publicKey: string;
 };
 
-export async function getWalletBalance(publicKey: string): Promise<number> {
-  const connection = new Connection(RPC_URL, 'confirmed');
+export async function getWalletBalance(
+  connection: Connection,
+  publicKey: string
+): Promise<number> {
+  try {
+    // Get the SOL balance of the wallet
+    const balance = await connection.getBalance(new PublicKey(publicKey));
 
-  // Get the SOL balance of the wallet
-  const balance = await connection.getBalance(new PublicKey(publicKey));
-  // Convert lamports to sol and show only 2 decimals
-  return +(balance / 10 ** 9).toFixed(2);
+    // Convert lamports to sol and show only 2 decimals
+    return balance / LAMPORTS_PER_SOL;
+  } catch (err) {
+    console.error("Error in getting wallet balance: ", err);
+    return 0;
+  }
 }
 
 export async function getTokenBalance(
   connection: Connection,
   walletAddress: PublicKey,
-  tokenMintAddress: PublicKey,  
+  tokenMintAddress: PublicKey
 ) {
-  try {      
-      return 0;
-  } catch (error) {
-      console.error('Error fetching token balance:', error);
-      throw error;
+  try {
+    return 0;
+  } catch (err) {
+    console.error("Error fetching token balance:", err);
+    throw err;
   }
 }
 
 export async function getSolPrice() {
   try {
     // Fetch the current price of SOL from CoinGecko API
-    const { data } = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    const { data } = await axios.get(
+      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd"
+    );
     return data.solana.usd;
-  } catch (error) {
-    console.error('Error fetching SOL price:', error);
-    throw error;
+  } catch (err) {
+    console.error("Error fetching SOL price:", err);
+    throw err;
   }
 }
 
@@ -54,53 +77,65 @@ export function generateSolanaKeypair() {
 
 export async function getWalletsFromFile() {
   try {
-    const walletsFile = path.join(__dirname, 'wallets.json');
-    const wallets = fs.readFileSync(walletsFile, 'utf8');
+    const walletsFile = path.join(__dirname, "wallets.json");
+    const wallets = fs.readFileSync(walletsFile, "utf8");
     return JSON.parse(wallets);
   } catch (err) {
+    console.error('Error in reading from file: ', err);
     return {};
   }
 }
 
 export async function storeWalletsToFile(wallets: WalletInfoType[]) {
-  const walletsFile = path.join(__dirname, 'wallets.json');
-  fs.writeFileSync(walletsFile, JSON.stringify(wallets, null, 2));
+  try {
+    const walletsFile = path.join(__dirname, "wallets.json");
+    fs.writeFileSync(walletsFile, JSON.stringify(wallets, null, 2));
 
-  console.log(`Wallets generated and saved to ${walletsFile}`);
+    console.log(`Wallets generated and saved to ${walletsFile}`);
+  } catch (err) {
+    console.error('Error in writing to file: ', err);
+  }
 }
 
 export function generateRandomAmounts(numberOfWallets: number) {
   const amounts = [];
   for (let index = 0; index < numberOfWallets; index++) {
-    const randomAmount = Math.random() * (SOL_BUY_MAX - SOL_BUY_MIN) + SOL_BUY_MIN;
+    const randomAmount =
+      Math.random() * (SOL_BUY_MAX - SOL_BUY_MIN) + SOL_BUY_MIN;
     amounts.push(randomAmount);
   }
 
   return amounts;
 }
 
-export async function sendSolToWallet(connection: Connection, fromPvtKey: string, toPubKey: PublicKey, amount: number) {
+export async function sendSolToWallet(
+  connection: Connection,
+  fromPvtKey: string,
+  toPubKey: PublicKey,
+  amount: number
+) {
   try {
     const transaction = new Transaction();
 
-    const srcPrivateKeyBuffer = Buffer.from(
-      fromPvtKey.slice(2),
-      'hex'
-    );
+    const srcPrivateKeyBuffer = Buffer.from(fromPvtKey.slice(2), "hex");
     const fromWallet = Keypair.fromSecretKey(srcPrivateKeyBuffer);
 
     const sendSolInstruction = SystemProgram.transfer({
       fromPubkey: fromWallet.publicKey,
       toPubkey: toPubKey,
-      lamports: LAMPORTS_PER_SOL * amount
+      lamports: LAMPORTS_PER_SOL * amount,
     });
 
     transaction.add(sendSolInstruction);
-    const transactionSignature = await sendAndConfirmTransaction(connection, transaction, [fromWallet]);
+    const transactionSignature = await sendAndConfirmTransaction(
+      connection,
+      transaction,
+      [fromWallet]
+    );
 
     console.log(`Transaction signature: ${transactionSignature}`);
-  } catch (e) {
-    console.error('Error occurred during transfer:', e);
+  } catch (err) {
+    console.error("Error occurred during transfer:", err);
   }
 }
 
@@ -109,20 +144,28 @@ export async function getNumberDecimals(
   mintAddress: PublicKey,
   connection: Connection
 ): Promise<number> {
-  const info = await connection.getParsedAccountInfo(mintAddress);
-  const decimals = (info.value?.data as ParsedAccountData).parsed.info
-    .decimals as number;
-  console.log(`Token Decimals: ${decimals}`);
-  return decimals;
+  try {
+    const info = await connection.getParsedAccountInfo(mintAddress);
+    const decimals = (info.value?.data as ParsedAccountData).parsed.info
+      .decimals as number;
+    console.log(`Token Decimals: ${decimals}`);
+    return decimals;
+  } catch (err) {
+    console.error('Error in getting number decimal: ', err);
+    return 9;
+  }
 }
 
-export async function sendTokenToWallet(connection: Connection, fromPvtKey: string, toPubKey: PublicKey, tokenAddress: string, amount: number) {
+export async function sendTokenToWallet(
+  connection: Connection,
+  fromPvtKey: string,
+  toPubKey: PublicKey,
+  tokenAddress: string,
+  amount: number
+) {
   try {
     const tokenMintAddress = new PublicKey(tokenAddress);
-    const srcPrivateKeyBuffer = Buffer.from(
-      fromPvtKey.slice(2),
-      'hex'
-    );
+    const srcPrivateKeyBuffer = Buffer.from(fromPvtKey.slice(2), "hex");
     const fromWallet = Keypair.fromSecretKey(srcPrivateKeyBuffer);
 
     const decimals = await getNumberDecimals(tokenMintAddress, connection);
@@ -137,7 +180,7 @@ export async function sendTokenToWallet(connection: Connection, fromPvtKey: stri
     console.log(`Source Account: ${fromTokenAccount.address.toString()}`);
 
     console.log(fromTokenAccount.amount);
-  
+
     let toTokenAccount = await getOrCreateAssociatedTokenAccount(
       connection,
       fromWallet,
@@ -161,7 +204,7 @@ export async function sendTokenToWallet(connection: Connection, fromPvtKey: stri
       `Transaction instructions: ${JSON.stringify(transferInstruction)}`
     );
     let latestBlockhash = await connection.getLatestBlockhash("confirmed");
-  
+
     // Compiles and signs the transaction message with the sender's Keypair.
     const messageV0 = new TransactionMessage({
       payerKey: fromWallet.publicKey,
@@ -191,9 +234,7 @@ export async function sendTokenToWallet(connection: Connection, fromPvtKey: stri
     console.log(
       `Transaction Successfully Confirmed! 🎉 View on SolScan: https://solscan.io/tx/${txid}`
     );
-  } catch (e) {
-    console.log('Error in transferring SPL token');
-    console.log(e);
+  } catch (err) {
+    console.error("Error in transferring SPL token: ", err);
   }
 }
-

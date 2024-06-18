@@ -40,9 +40,8 @@ export async function generateWallets(numberOfWallets: number) {
     }
 
     storeWalletsToFile(wallets);
-  } catch (e) {
-    console.log("Error occured in generating wallets.");
-    console.log(e);
+  } catch (err) {
+    console.error("Error occured in generating wallets: ", err);
   }
 }
 
@@ -79,8 +78,8 @@ export async function getBuyTransaction(
 
     const datax = await response.json();
     return datax["tx_hash"];
-  } catch (error) {
-    console.error("Error fetching data:", error);
+  } catch (err) {
+    console.error("Error fetching data:", err);
   }
 }
 
@@ -91,8 +90,8 @@ async function placeBuyTrade(tokenMint: any, privateKey: string, amt: number) {
     console.log(tx_hash);
 
     console.log(`https://solscan.io/tx/${tx_hash}`);
-  } catch (e) {
-    console.log(e);
+  } catch (err) {
+    console.error('Error in buying the token: ', err);
   }
 }
 
@@ -125,8 +124,8 @@ export async function getSellTransaction(
       }
       return response.json()["transaction"];
     })
-    .catch((error) => {
-      console.error(error);
+    .catch((err) => {
+      console.error('Error in creating sell transaction: ', err);
     });
 }
 
@@ -153,8 +152,8 @@ async function placeSellTrade(tokenMint: any, privateKey: string, amt: any) {
     });
 
     console.log(`https://solscan.io/tx/${txid}`);
-  } catch (e) {
-    console.log(e);
+  } catch (err) {
+    console.error('Error in selling the token back: ', err);
   }
 }
 
@@ -173,7 +172,10 @@ async function beginBuying(wallets: WalletInfoType[], amounts: number[]) {
 
   for (let index = 0; index < wallets.length; index++) {
     await getLatestTokenTransaction(TOKEN_MINT);
-    const balance = await getWalletBalance(wallets[index].publicKey);
+    const balance = await getWalletBalance(
+      connection,
+      wallets[index].publicKey
+    );
 
     // All tokens should be accumulated to first wallet and swapped there, so more fee should be prepared in the first wallet.
     await placeBuyTrade(
@@ -188,7 +190,11 @@ async function beginBuying(wallets: WalletInfoType[], amounts: number[]) {
 
 async function beginSelling(wallets: WalletInfoType[]) {
   for (let index = 1; index < wallets.length; index++) {
-    const tokenBalance = await getTokenBalance(connection, new PublicKey(wallets[index].publicKey), new PublicKey(TOKEN_MINT));
+    const tokenBalance = await getTokenBalance(
+      connection,
+      new PublicKey(wallets[index].publicKey),
+      new PublicKey(TOKEN_MINT)
+    );
 
     await sendTokenToWallet(
       connection,
@@ -207,8 +213,13 @@ async function beginSelling(wallets: WalletInfoType[]) {
 
   await placeSellTrade(TOKEN_MINT, wallets[0].privateKey, tokenBalance);
 
-  const solBalance = await getWalletBalance(wallets[0].publicKey);
-  await sendSolToWallet(connection, wallets[0].privateKey, owner.publicKey, solBalance);
+  const solBalance = await getWalletBalance(connection, wallets[0].publicKey);
+  await sendSolToWallet(
+    connection,
+    wallets[0].privateKey,
+    owner.publicKey,
+    solBalance
+  );
 }
 
 async function getLatestTokenTransaction(tokenMintAddress: string) {
@@ -239,10 +250,10 @@ async function getLatestTokenTransaction(tokenMintAddress: string) {
     } else {
       console.log("No token transactions were found.");
     }
-  } catch (error) {
+  } catch (err) {
     console.error(
       "Error occurred during latest token transaction lookup:",
-      error
+      err
     );
   }
 }
@@ -288,13 +299,16 @@ async function main() {
   } else if (response.action === "buy") {
     const amounts = generateRandomAmounts(wallets.length);
 
-    const mainWalletBalance = await getWalletBalance(owner.publicKey.toString());
+    const mainWalletBalance = await getWalletBalance(
+      connection,
+      owner.publicKey.toString()
+    );
     const neededBalance = amounts.reduce(
       (sum, currentVal) => sum + currentVal,
       0
     );
     if (neededBalance > mainWalletBalance) {
-      console.log("Insufficient balance in the main wallet.");
+      console.error("Insufficient balance in the main wallet.");
       return;
     }
 
