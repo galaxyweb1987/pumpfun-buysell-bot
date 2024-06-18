@@ -1,0 +1,27 @@
+{
+  "name": "pumpfun-buysell-bot",
+  "version": "1.0.0",
+  "description": "Bot for Buy/Sell on pump.fun",
+  "main": "main.ts",
+  "scripts": {
+    "start": "ts-node main.ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.30.0",
+    "@solana/spl-token": "^0.4.6",
+    "@solana/web3.js": "^1.93.0",
+    "@types/bs58": "^4.0.4",
+    "@types/crypto-js": "^4.2.2",
+    "@types/minimist": "^1.2.5",
+    "@types/prompts": "^2.4.9",
+    "axios": "^1.7.2",
+    "bs58": "^5.0.0",
+    "crypto-js": "^4.2.0",
+    "minimist": "^1.2.8",
+    "prompts": "^2.4.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  }
+}
