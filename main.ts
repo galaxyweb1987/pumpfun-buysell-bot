@@ -141,9 +141,6 @@ async function beginSelling(wallets: WalletInfoType[]) {
 }
 
 async function main() {
-  console.log(PRIVATE_KEY);
-  return;
-
   let shouldContinue = true;
 
   while (shouldContinue) {
