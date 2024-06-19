@@ -5,6 +5,7 @@ import {
   PAUSE_ON_INTERRUPTION,
   PLATFORM_FEE,
   PRIVATE_KEY,
+  SOL_RENT,
   TOKEN_MINT,
 } from "./constants";
 import {
@@ -23,6 +24,7 @@ import {
   sendTokenToWallet,
   setPausedState,
   storeWalletsToFile,
+  waitSeconds,
 } from "./utils";
 
 const owner = Keypair.fromSecretKey(bs58.decode(PRIVATE_KEY));
@@ -36,7 +38,6 @@ async function generateWallets(numberOfWallets: number) {
     }
 
     storeWalletsToFile(wallets);
-    console.log("Created");
   } catch (err) {
     console.error("Error occured in generating wallets: ", err);
   }
@@ -51,9 +52,6 @@ async function beginBuying(wallets: WalletInfoType[], amounts: number[]) {
         amounts[index]
       );
     }
-
-    // const neededFeeForLastAccumulation =
-    //   amounts.reduce((sum, currentVal) => sum + currentVal, 0) * PLATFORM_FEE;
 
     let prevTransaction = "";
     for (let index = 0; index < wallets.length; index++) {
@@ -76,22 +74,16 @@ async function beginBuying(wallets: WalletInfoType[], amounts: number[]) {
       }
 
       const balance = await getWalletBalance(wallets[index].publicKey);
-
-      console.log("balance===================");
-      console.log(balance);
-
-      // All tokens should be accumulated to first wallet and swapped there, so more fee might be needed in the first wallet.
-      // const amount =
-      //   (balance - (index === 0 ? neededFeeForLastAccumulation : 0)) *
-      //     LAMPORTS_PER_SOL *
-      //     (1 - PLATFORM_FEE) -
-      //   30000;
-      const amount = balance * LAMPORTS_PER_SOL * (1 - PLATFORM_FEE) - 30000; // subtract 2 time transfer fee: 15000 * 2
-      prevTransaction = await placeBuyTrade(
-        TOKEN_MINT,
-        wallets[index].privateKey,
-        Math.round(amount) / LAMPORTS_PER_SOL
-      );
+      const allowedBalance = balance - SOL_RENT;
+      if (allowedBalance > 0) {
+        const amount = allowedBalance / 2 * LAMPORTS_PER_SOL * (1 - PLATFORM_FEE); // subtract 2 time transfer fee: 15000 * 2
+        const txid = await placeBuyTrade(
+          TOKEN_MINT,
+          wallets[index].privateKey,
+          Math.round(amount) / LAMPORTS_PER_SOL
+        );
+        prevTransaction = txid ? txid : prevTransaction;
+      }
     }
   } catch (err) {
     console.error("Error in buying process: ", err);
@@ -100,19 +92,13 @@ async function beginBuying(wallets: WalletInfoType[], amounts: number[]) {
 
 async function beginSelling(wallets: WalletInfoType[]) {
   try {
-    console.log("right after beginselling");
-    console.log(wallets);
-    console.log("==================");
     for (let index = 1; index < wallets.length; index++) {
       const tokenBalance = await getTokenBalance(
         new PublicKey(wallets[index].publicKey),
         new PublicKey(TOKEN_MINT)
       );
 
-      console.log("================token balance");
-      console.log(tokenBalance);
-
-      if(tokenBalance > 0) {
+      if (tokenBalance > 0) {
         await sendTokenToWallet(
           wallets[index].privateKey,
           new PublicKey(wallets[0].publicKey),
@@ -120,23 +106,44 @@ async function beginSelling(wallets: WalletInfoType[]) {
           tokenBalance
         );
       }
+
+      const solBalance = await getWalletBalance(wallets[index].publicKey);
+      const amount = solBalance - SOL_RENT;
+      if (amount > 0) {
+        await sendSolToWallet(
+          wallets[index].privateKey,
+          new PublicKey(wallets[0].publicKey),
+          solBalance - SOL_RENT
+        ); // subtract sol transfer fee
+      }
     }
 
     const tokenBalance = await getTokenBalance(
       new PublicKey(wallets[0].publicKey),
       new PublicKey(TOKEN_MINT)
     );
-
-    await placeSellTrade(owner, TOKEN_MINT, wallets[0].privateKey, tokenBalance);
+    await placeSellTrade(
+      owner,
+      TOKEN_MINT,
+      wallets[0].privateKey,
+      tokenBalance
+    );
 
     const solBalance = await getWalletBalance(wallets[0].publicKey);
-    await sendSolToWallet(wallets[0].privateKey, owner.publicKey, solBalance);
+    const amount = solBalance - SOL_RENT;
+    if (amount > 0) {
+      await waitSeconds(30);
+      await sendSolToWallet(wallets[0].privateKey, owner.publicKey, solBalance);
+    }
   } catch (err) {
-    console.error('Error in selling process: ', err);
+    console.error("Error in selling process: ", err);
   }
 }
 
 async function main() {
+  console.log(PRIVATE_KEY);
+  return;
+
   let shouldContinue = true;
 
   while (shouldContinue) {
@@ -180,12 +187,7 @@ async function main() {
           0
         );
 
-        console.log("============mainwalletbalance");
-        console.log(amounts);
-        console.log(wallets);
-        console.log(mainWalletBalance);
-        console.log(neededBalance);
-        if (neededBalance > mainWalletBalance) {
+        if (neededBalance + SOL_RENT > mainWalletBalance) {
           console.error("Insufficient balance in the main wallet.");
           break;
         }
@@ -205,9 +207,12 @@ async function main() {
           wallets,
           wallets.map((wallet: PausedWalletInfoType) => wallet.amount)
         );
+      } else {
+        console.log('There is no process to resume.');
       }
     } else if (response.action === "exit") {
       shouldContinue = false;
+      console.log("Application exited.");
     } else {
       console.error("Invalid option. Please choose a valid option.");
     }
