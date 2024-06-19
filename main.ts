@@ -80,7 +80,7 @@ async function beginBuying(wallets: WalletInfoType[], amounts: number[]) {
         const txid = await placeBuyTrade(
           TOKEN_MINT,
           wallets[index].privateKey,
-          Math.round(amount) / LAMPORTS_PER_SOL
+          Math.round(allowedBalance) / LAMPORTS_PER_SOL
         );
         prevTransaction = txid ? txid : prevTransaction;
       }
@@ -113,7 +113,7 @@ async function beginSelling(wallets: WalletInfoType[]) {
         await sendSolToWallet(
           wallets[index].privateKey,
           new PublicKey(wallets[0].publicKey),
-          solBalance - SOL_RENT
+          amount
         ); // subtract sol transfer fee
       }
     }
@@ -133,7 +133,7 @@ async function beginSelling(wallets: WalletInfoType[]) {
     const amount = solBalance - SOL_RENT;
     if (amount > 0) {
       await waitSeconds(30);
-      await sendSolToWallet(wallets[0].privateKey, owner.publicKey, solBalance);
+      await sendSolToWallet(wallets[0].privateKey, owner.publicKey, amount);
     }
   } catch (err) {
     console.error("Error in selling process: ", err);

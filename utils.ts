@@ -50,7 +50,7 @@ async function getNumberDecimals(mintAddress: PublicKey): Promise<number> {
     const info = await connection.getParsedAccountInfo(mintAddress);
     const decimals = (info.value?.data as ParsedAccountData).parsed.info
       .decimals as number;
-    console.log(`Token Decimals: ${decimals}`);
+    // console.log(`Token Decimals: ${decimals}`);
     return decimals;
   } catch (err) {
     console.error("Error in getting number decimal: ", err);
@@ -279,7 +279,6 @@ export async function sendTokenToWallet(
       transferAmountInDecimals
     );
 
-    await waitSeconds(10);
     let latestBlockhash = await connection.getLatestBlockhash("confirmed");
 
     // Compiles and signs the transaction message with the sender's Keypair.
@@ -291,12 +290,11 @@ export async function sendTokenToWallet(
     const versionedTransaction = new VersionedTransaction(messageV0);
     versionedTransaction.sign([fromWallet]);
 
-    await waitSeconds(10);
     console.log(
       `Sending ${amount} token from ${fromWallet.publicKey} to ${toPubKey}`
     );
     const txid = await connection.sendTransaction(versionedTransaction, {
-      maxRetries: 5,
+      maxRetries: 20,
     });
     console.log(`Transaction Submitted: ${txid}`);
 
