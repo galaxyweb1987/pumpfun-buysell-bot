@@ -57,11 +57,13 @@ async function getNumberDecimals(mintAddress: PublicKey): Promise<number> {
   }
 }
 
+// Wait for [seconds] seconds before proceeding to next method
 export async function waitSeconds(seconds: number) {
   console.log(`Waiting ${seconds} seconds..`);
   await new Promise((_resolve_) => setTimeout(_resolve_, seconds * 1000));
 }
 
+// Get minimum rent fee of solana account
 export async function getRentFee() {
   try {
     const dataLength = 1500;
@@ -74,6 +76,7 @@ export async function getRentFee() {
   }
 }
 
+// Get current SOL price in usd
 export async function getSolPrice() {
   try {
     // Get the current price of SOL from CoinGecko API
@@ -87,9 +90,10 @@ export async function getSolPrice() {
   }
 }
 
-export async function getWalletBalance(publicKey: string): Promise<number> {
+// Get SOL balance of wallet
+export async function getWalletBalance(walletAddress: string): Promise<number> {
   try {
-    const balance = await connection.getBalance(new PublicKey(publicKey));
+    const balance = await connection.getBalance(new PublicKey(walletAddress));
     return balance / LAMPORTS_PER_SOL;
   } catch (err) {
     console.error("Error in getting wallet balance: ", err);
@@ -97,6 +101,7 @@ export async function getWalletBalance(publicKey: string): Promise<number> {
   }
 }
 
+// Get SPL token balance of wallet
 export async function getTokenBalance(
   walletAddress: PublicKey,
   tokenMintAddress: PublicKey
@@ -134,6 +139,7 @@ export async function getTokenBalance(
   }
 }
 
+// Create a wallet by generating key pair of solana account
 export function generateSolanaKeypair() {
   const keypair = Keypair.generate();
   const publicKey = keypair.publicKey.toBase58();
@@ -142,6 +148,7 @@ export function generateSolanaKeypair() {
   return { publicKey, privateKey };
 }
 
+// Read list of generated wallets from the wallets.json
 export async function getWalletsFromFile() {
   try {
     const walletsFile = path.join(__dirname, "wallets.json");
@@ -153,6 +160,7 @@ export async function getWalletsFromFile() {
   }
 }
 
+// Write list of generated wallets to the wallets.json
 export async function storeWalletsToFile(wallets: WalletInfoType[]) {
   try {
     const walletsFile = path.join(__dirname, "wallets.json");
@@ -164,6 +172,7 @@ export async function storeWalletsToFile(wallets: WalletInfoType[]) {
   }
 }
 
+// Get list of wallets for resuming the trade from paused.json
 export async function getPausedState() {
   try {
     const pausedFile = path.join(__dirname, "paused.json");
@@ -175,17 +184,21 @@ export async function getPausedState() {
   }
 }
 
+// Write list of wallets for resuming the trade to paused.json
 export async function setPausedState(wallets: PausedWalletInfoType[]) {
   try {
     const pausedFile = path.join(__dirname, "paused.json");
     fs.writeFileSync(pausedFile, JSON.stringify(wallets, null, 2));
 
-    console.log(`Paused process saved to ${pausedFile}`);
+    if (wallets?.length > 0) {
+      console.log(`Paused process saved to ${pausedFile}`);
+    }
   } catch (err) {
     console.error("Error in writing to paused wallets file: ", err);
   }
 }
 
+// Generate SOL amounts to send to each wallet
 export function generateRandomAmounts(numberOfWallets: number) {
   const amounts = [];
   for (let index = 0; index < numberOfWallets; index++) {
@@ -200,26 +213,26 @@ export function generateRandomAmounts(numberOfWallets: number) {
   return amounts;
 }
 
+// Transfer [amount] SOL between wallets
 export async function sendSolToWallet(
   fromPvtKey: string,
   toPubKey: PublicKey,
   amount: number
 ) {
   try {
-    const transaction = new Transaction();
-
     const fromWallet = Keypair.fromSecretKey(bs58.decode(fromPvtKey));
 
+    console.log(
+      `Sending ${amount.toFixed(4)} SOL from ${fromWallet.publicKey} to ${toPubKey}`
+    );
+
+    const transaction = new Transaction();
     const sendSolInstruction = SystemProgram.transfer({
       fromPubkey: fromWallet.publicKey,
       toPubkey: toPubKey,
       lamports: Math.round(LAMPORTS_PER_SOL * amount),
     });
-    transaction.add(sendSolInstruction);
-
-    console.log(
-      `Sending ${amount} SOL from ${fromWallet.publicKey} to ${toPubKey}`
-    );
+    transaction.add(sendSolInstruction);    
 
     const transactionSignature = await sendAndConfirmTransaction(
       connection,
@@ -236,6 +249,7 @@ export async function sendSolToWallet(
   }
 }
 
+// Transfer [amount] SPL token between wallets
 export async function sendTokenToWallet(
   fromPvtKey: string,
   toPubKey: PublicKey,
@@ -243,10 +257,16 @@ export async function sendTokenToWallet(
   amount: number
 ) {
   try {
-    const tokenMintAddress = new PublicKey(tokenAddress);
     const fromWallet = Keypair.fromSecretKey(bs58.decode(fromPvtKey));
-
+    const tokenMintAddress = new PublicKey(tokenAddress);
     const decimals = await getNumberDecimals(tokenMintAddress);
+
+    console.log(
+      `Sending ${amount.toFixed(2)} token from ${fromWallet.publicKey} to ${toPubKey}`
+    );
+
+    // Adjust the transfer amount according to the token's decimals to ensure accurate transfers.
+    const transferAmountInDecimals = Math.round(amount * Math.pow(10, decimals));
 
     // Create or get the associated token accounts for the sender and receiver.
     let fromTokenAccount = await getOrCreateAssociatedTokenAccount(
@@ -263,12 +283,8 @@ export async function sendTokenToWallet(
       toPubKey
     );
 
-    // Adjusts the transfer amount according to the token's decimals to ensure accurate transfers.
-    const transferAmountInDecimals = amount * Math.pow(10, decimals);
-
-    // Prepares the transfer instructions with all necessary information.
+    // Prepare the transfer instructions with all necessary information.
     const transferInstruction = createTransferInstruction(
-      // Those addresses are the Associated Token Accounts belonging to the sender and receiver
       fromTokenAccount.address,
       toTokenAccount.address,
       fromWallet.publicKey,
@@ -277,7 +293,7 @@ export async function sendTokenToWallet(
 
     let latestBlockhash = await connection.getLatestBlockhash("confirmed");
 
-    // Compiles and signs the transaction message with the sender's Keypair.
+    // Compile and sign the transaction message with the sender's Keypair.
     const messageV0 = new TransactionMessage({
       payerKey: fromWallet.publicKey,
       recentBlockhash: latestBlockhash.blockhash,
@@ -286,9 +302,6 @@ export async function sendTokenToWallet(
     const versionedTransaction = new VersionedTransaction(messageV0);
     versionedTransaction.sign([fromWallet]);
 
-    console.log(
-      `Sending ${amount} token from ${fromWallet.publicKey} to ${toPubKey}`
-    );
     const txid = await connection.sendTransaction(versionedTransaction, {
       maxRetries: 20,
     });
@@ -305,6 +318,7 @@ export async function sendTokenToWallet(
     if (confirmation.value.err) {
       throw new Error("Transaction not confirmed.");
     }
+
     console.log(
       `Transaction Successfully Confirmed! View on SolScan: https://solscan.io/tx/${txid}`
     );
@@ -314,6 +328,7 @@ export async function sendTokenToWallet(
   }
 }
 
+// Get the latest transaction made on the target token
 export async function getLatestTokenTransaction(tokenMintAddress: string) {
   try {
     const latestBlockhash = await connection.getLatestBlockhash();
@@ -345,12 +360,13 @@ export async function getLatestTokenTransaction(tokenMintAddress: string) {
     }
   } catch (err) {
     console.error(
-      "Error occurred during latest token transaction lookup:",
+      "Error occurred during getting latest token transaction: ",
       err
     );
   }
 }
 
+// Place buy order on pump.fun for the target token with [amount] SOL
 export async function placeBuyTrade(
   tokenMint: any,
   privateKey: string,
@@ -369,7 +385,7 @@ export async function placeBuyTrade(
   try {
     const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
     console.log(
-      `Placing buy order with ${amount} SOL on ${walletInfo.publicKey}...`
+      `Placing buy order with ${amount.toFixed(4)} SOL on ${walletInfo.publicKey}...`
     );
     const response = await axios({
       url: url,
@@ -388,13 +404,15 @@ export async function placeBuyTrade(
   }
 }
 
+// Create sell transaction on pump.fun for SOL with [amount] SPL token
 export async function getSellTransaction(
   tokenMint: any,
   privateKey: string,
   amount: any
 ) {
-  const url = `${API_URL}/trade`;
+  const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
 
+  const url = `${API_URL}/trade`;
   const data = {
     trade_type: "sell",
     mint: tokenMint,
@@ -404,9 +422,10 @@ export async function getSellTransaction(
     userPrivateKey: privateKey,
   };
 
-  const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
-  console.log(`Placing sell order with ${amount} token on ${walletInfo.publicKey}`);
-  
+  console.log(
+    `Placing sell order with ${amount.toFixed(2)} token on ${walletInfo.publicKey}`
+  );
+
   const response = await axios({
     url: url,
     method: "post",
@@ -422,30 +441,28 @@ export async function getSellTransaction(
   }
 }
 
+// Place sell order on pump.fun for SOL with [amount] SPL token
 export async function placeSellTrade(
-  owner: Keypair,
+  // owner: Keypair,
   tokenMint: any,
   privateKey: string,
   amount: number
 ) {
   try {
-    const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
+    // const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
 
-    const encoded_tx: any = await getSellTransaction(
-      tokenMint,
-      privateKey,
-      amount
-    );
+    const tx_id: any = await getSellTransaction(tokenMint, privateKey, amount);
 
-    if (encoded_tx) {
+    if (tx_id) {
       console.log(
-        `Transaction successful! View on SolScan: https://solscan.io/tx/${encoded_tx}`
+        `Transaction successful! View on SolScan: https://solscan.io/tx/${tx_id}`
       );
     }
 
-    // if (encoded_tx) {
+    // Comment: To be used when tx_id is in encoded state
+    // if (tx_id) {
     //   const transaction = VersionedTransaction.deserialize(
-    //     bs58.decode(encoded_tx)
+    //     bs58.decode(tx_id)
     //   );
 
     //   console.log(
