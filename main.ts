@@ -51,10 +51,12 @@ async function beginBuying(wallets: WalletInfoType[], amounts: number[]) {
         new PublicKey(wallets[index].publicKey),
         amounts[index]
       );
+      await waitSeconds(10);
     }
 
     let prevTransaction = "";
-    for (let index = 0; index < wallets.length; index++) {
+    let index = 0;
+    for (index = 0; index < wallets.length; index++) {
       if (PAUSE_ON_INTERRUPTION && index !== 0) {
         const latestTransaction = await getLatestTokenTransaction(TOKEN_MINT);
         if (latestTransaction !== prevTransaction) {
@@ -80,10 +82,15 @@ async function beginBuying(wallets: WalletInfoType[], amounts: number[]) {
         const txid = await placeBuyTrade(
           TOKEN_MINT,
           wallets[index].privateKey,
-          Math.round(allowedBalance) / LAMPORTS_PER_SOL
+          Math.round(amount) / LAMPORTS_PER_SOL
         );
         prevTransaction = txid ? txid : prevTransaction;
+        await waitSeconds(10);
       }
+    }
+
+    if(index >= wallets.length) { // if the process is not paused
+      await setPausedState([]);
     }
   } catch (err) {
     console.error("Error in buying process: ", err);
@@ -105,6 +112,9 @@ async function beginSelling(wallets: WalletInfoType[]) {
           TOKEN_MINT,
           tokenBalance
         );
+        await waitSeconds(10);
+      } else {
+        console.log(`Token balance is apparently 0 on ${wallets[index].publicKey}.`);
       }
 
       const solBalance = await getWalletBalance(wallets[index].publicKey);
@@ -115,6 +125,7 @@ async function beginSelling(wallets: WalletInfoType[]) {
           new PublicKey(wallets[0].publicKey),
           amount
         ); // subtract sol transfer fee
+        await waitSeconds(10);
       }
     }
 
@@ -122,17 +133,21 @@ async function beginSelling(wallets: WalletInfoType[]) {
       new PublicKey(wallets[0].publicKey),
       new PublicKey(TOKEN_MINT)
     );
-    await placeSellTrade(
-      owner,
-      TOKEN_MINT,
-      wallets[0].privateKey,
-      tokenBalance
-    );
+    if(tokenBalance) {
+      await placeSellTrade(
+        owner,
+        TOKEN_MINT,
+        wallets[0].privateKey,
+        tokenBalance
+      );
+    } else {
+      console.log(`There is no token available to swap with SOL on ${wallets[0].publicKey}`);
+    }
 
+    await waitSeconds(20);
     const solBalance = await getWalletBalance(wallets[0].publicKey);
     const amount = solBalance - SOL_RENT;
-    if (amount > 0) {
-      await waitSeconds(30);
+    if (amount > 0) {      
       await sendSolToWallet(wallets[0].privateKey, owner.publicKey, amount);
     }
   } catch (err) {

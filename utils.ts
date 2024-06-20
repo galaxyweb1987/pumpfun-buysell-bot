@@ -46,7 +46,6 @@ export type PausedWalletInfoType = {
 // Get the number of decimals for a given token to accurately handle token amounts.
 async function getNumberDecimals(mintAddress: PublicKey): Promise<number> {
   try {
-    await waitSeconds(10);
     const info = await connection.getParsedAccountInfo(mintAddress);
     const decimals = (info.value?.data as ParsedAccountData).parsed.info
       .decimals as number;
@@ -90,7 +89,6 @@ export async function getSolPrice() {
 
 export async function getWalletBalance(publicKey: string): Promise<number> {
   try {
-    await waitSeconds(10);
     const balance = await connection.getBalance(new PublicKey(publicKey));
     return balance / LAMPORTS_PER_SOL;
   } catch (err) {
@@ -104,7 +102,6 @@ export async function getTokenBalance(
   tokenMintAddress: PublicKey
 ) {
   try {
-    await waitSeconds(10);
     const response = await axios({
       url: RPC_URL,
       method: "post",
@@ -220,7 +217,6 @@ export async function sendSolToWallet(
     });
     transaction.add(sendSolInstruction);
 
-    await waitSeconds(10);
     console.log(
       `Sending ${amount} SOL from ${fromWallet.publicKey} to ${toPubKey}`
     );
@@ -320,11 +316,9 @@ export async function sendTokenToWallet(
 
 export async function getLatestTokenTransaction(tokenMintAddress: string) {
   try {
-    await waitSeconds(10);
     const latestBlockhash = await connection.getLatestBlockhash();
 
     // Find all transactions that include this token
-    await waitSeconds(10);
     const tokenTransactionsLamportRange =
       await connection.getSignaturesForAddress(
         new PublicKey(tokenMintAddress),
@@ -337,7 +331,6 @@ export async function getLatestTokenTransaction(tokenMintAddress: string) {
         .slice(0, 1);
 
       if (sortedTokenTransactions.length > 0) {
-        await waitSeconds(10);
         const latestTokenTransaction = await connection.getTransaction(
           sortedTokenTransactions[0].signature,
           { maxSupportedTransactionVersion: 0 }
@@ -411,6 +404,9 @@ export async function getSellTransaction(
     userPrivateKey: privateKey,
   };
 
+  const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
+  console.log(`Placing sell order with ${amount} token on ${walletInfo.publicKey}`);
+  
   const response = await axios({
     url: url,
     method: "post",
@@ -419,7 +415,7 @@ export async function getSellTransaction(
   });
 
   try {
-    return response.data.transaction;
+    return response.data.tx_hash;
   } catch (err) {
     console.error("Error in creating sell transaction: ", err);
     throw err;
@@ -442,27 +438,32 @@ export async function placeSellTrade(
     );
 
     if (encoded_tx) {
-      const transaction = VersionedTransaction.deserialize(
-        bs58.decode(encoded_tx)
-      );
-
       console.log(
-        `Placing sell order with ${amount} token on ${walletInfo.publicKey}`
+        `Transaction successful! View on SolScan: https://solscan.io/tx/${encoded_tx}`
       );
-      transaction.sign([owner]);
-
-      await waitSeconds(10);
-      const txid = await connection.sendTransaction(transaction, {
-        skipPreflight: false,
-        maxRetries: 5,
-      });
-
-      console.log(
-        `Transaction successful! View on SolScan: https://solscan.io/tx/${txid}`
-      );
-    } else {
-      console.log("Transaction was not successful.");
     }
+
+    // if (encoded_tx) {
+    //   const transaction = VersionedTransaction.deserialize(
+    //     bs58.decode(encoded_tx)
+    //   );
+
+    //   console.log(
+    //     `Placing sell order with ${amount} token on ${walletInfo.publicKey}`
+    //   );
+    //   transaction.sign([owner]);
+
+    //   const txid = await connection.sendTransaction(transaction, {
+    //     skipPreflight: false,
+    //     maxRetries: 20,
+    //   });
+
+    //   console.log(
+    //     `Transaction successful! View on SolScan: https://solscan.io/tx/${txid}`
+    //   );
+    // } else {
+    //   console.log("Transaction was not successful.");
+    // }
   } catch (err) {
     console.error("Error in selling the token back: ", err);
   }
