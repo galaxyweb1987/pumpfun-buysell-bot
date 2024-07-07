@@ -28,7 +28,6 @@ import {
 } from "@solana/spl-token";
 import * as BufferLayout from "@solana/buffer-layout";
 import {
-  API_URL,
   ASSOC_TOKEN_ACC_PROG,
   EVENT_AUTHORITY,
   FEE_RECIPIENT,
@@ -399,129 +398,6 @@ export async function placeBuyTrade(
   privateKey: string,
   amount: number
 ) {
-  const url = `${API_URL}/trade`;
-  const data = {
-    trade_type: "buy",
-    mint: tokenMint,
-    amount: amount,
-    slippage: SLIPPAGE,
-    priorityFee: PRIORITY_FEE,
-    userPrivateKey: privateKey,
-  };
-
-  try {
-    const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
-    console.log(
-      `Placing buy order with ${amount.toFixed(4)} SOL on ${
-        walletInfo.publicKey
-      }...`
-    );
-    const response = await axios({
-      url: url,
-      method: "post",
-      headers: { "Content-Type": "application/json" },
-      data: JSON.stringify(data),
-    });
-
-    const txid = response.data.tx_hash;
-    console.log(`Transaction successful: https://solscan.io/tx/${txid}`);
-
-    return txid;
-  } catch (err) {
-    console.error("Error in buying the token:", err);
-    return null;
-  }
-}
-
-// Create sell transaction on pump.fun for SOL with [amount] SPL token
-export async function getSellTransaction(
-  tokenMint: any,
-  privateKey: string,
-  amount: any
-) {
-  const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
-
-  const url = `${API_URL}/trade`;
-  const data = {
-    trade_type: "sell",
-    mint: tokenMint,
-    amount: amount,
-    slippage: SLIPPAGE,
-    priorityFee: PRIORITY_FEE,
-    userPrivateKey: privateKey,
-  };
-
-  console.log(
-    `Placing sell order with ${amount.toFixed(2)} token on ${
-      walletInfo.publicKey
-    }`
-  );
-
-  const response = await axios({
-    url: url,
-    method: "post",
-    headers: { "Content-Type": "application/json" },
-    data: JSON.stringify(data),
-  });
-
-  try {
-    return response.data.tx_hash;
-  } catch (err) {
-    console.error("Error in creating sell transaction: ", err);
-    throw err;
-  }
-}
-
-// Place sell order on pump.fun for SOL with [amount] SPL token
-export async function placeSellTrade(
-  // owner: Keypair,
-  tokenMint: any,
-  privateKey: string,
-  amount: number
-) {
-  try {
-    // const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
-
-    const tx_id: any = await getSellTransaction(tokenMint, privateKey, amount);
-
-    if (tx_id) {
-      console.log(
-        `Transaction successful! View on SolScan: https://solscan.io/tx/${tx_id}`
-      );
-    }
-
-    // Comment: To be used when tx_id is in encoded state
-    // if (tx_id) {
-    //   const transaction = VersionedTransaction.deserialize(
-    //     bs58.decode(tx_id)
-    //   );
-
-    //   console.log(
-    //     `Placing sell order with ${amount} token on ${walletInfo.publicKey}`
-    //   );
-    //   transaction.sign([owner]);
-
-    //   const txid = await connection.sendTransaction(transaction, {
-    //     skipPreflight: false,
-    //     maxRetries: 20,
-    //   });
-
-    //   console.log(
-    //     `Transaction successful! View on SolScan: https://solscan.io/tx/${txid}`
-    //   );
-    // } else {
-    //   console.log("Transaction was not successful.");
-    // }
-  } catch (err) {
-    console.error("Error in selling the token back: ", err);
-  }
-}
-
-export async function newBuy(
-  tokenMint: any,
-  privateKey: string,
-  amount: number
-) {
   try {
     const coinData = await getCoinData(tokenMint);
 
@@ -533,6 +409,13 @@ export async function newBuy(
     const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
     const tokenMintAddress = new PublicKey(tokenMint);
 
+    console.log(
+      `Placing buy order with ${amount.toFixed(4)} SOL on ${
+        walletInfo.publicKey
+      }...`
+    );
+
+    // Get token account and generate related instruction
     const response = await axios({
       url: RPC_URL,
       method: "post",
@@ -563,10 +446,10 @@ export async function newBuy(
         tokenMintAddress,
         walletInfo.publicKey
       );
-      //  = await getOrCreateAssociatedTokenAccount(connection, walletInfo, tokenMintAddress, walletInfo.publicKey);
+
       const accountInfo = await connection.getAccountInfo(tokenAccount);
 
-      if(accountInfo === null) {
+      if (accountInfo === null) {
         tokenAccountInstructions = createAssociatedTokenAccountInstruction(
           walletInfo.publicKey,
           tokenAccount,
@@ -579,19 +462,14 @@ export async function newBuy(
     }
 
     // Calculate tokens out
-    // console.log(coinData);
     const solInLamports = amount * LAMPORTS_PER_SOL;
     const tokenOut = Math.floor(
       (solInLamports * coinData.virtual_token_reserves) /
         coinData.virtual_sol_reserves
     );
 
-    // Calculate max_sol_cost and amount
     const solInWithSlippage = (amount * (100 + SLIPPAGE)) / 100;
     const maxSolCost = Math.floor(solInWithSlippage * LAMPORTS_PER_SOL);
-
-    // Calculate the fee
-    const feeAmount = Math.floor(amount * 0.03 * LAMPORTS_PER_SOL);
 
     // Define account keys required for the swap
     const MINT = new PublicKey(coinData.mint);
@@ -619,13 +497,11 @@ export async function newBuy(
       { pubkey: ASSOCIATED_BONDING_CURVE, isSigner: false, isWritable: true },
       { pubkey: ASSOCIATED_USER, isSigner: false, isWritable: true },
       { pubkey: USER, isSigner: true, isWritable: true },
-      // { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       {
         pubkey: new PublicKey(SYSTEM_PROGRAM),
         isSigner: false,
         isWritable: false,
       },
-      // { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       {
         pubkey: new PublicKey(TOKEN_PROGRAM),
         isSigner: false,
@@ -737,12 +613,14 @@ export async function newBuy(
     console.log(
       `Transaction Successfully Confirmed! View on SolScan: https://solscan.io/tx/${txid}`
     );
+    return txid;
   } catch (err) {
-    console.error("Error in placing new buy: ", err);
+    console.error("Error in buying the token: ", err);
   }
 }
 
-export async function newSell(
+// Place sell order on pump.fun for SOL with [amount] SPL token
+export async function placeSellTrade(
   tokenMint: any,
   privateKey: string,
   amount: number
@@ -757,6 +635,12 @@ export async function newSell(
 
     const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
     const tokenMintAddress = new PublicKey(tokenMint);
+
+    console.log(
+      `Placing sell order with ${amount.toFixed(2)} token on ${
+        walletInfo.publicKey
+      }`
+    );
 
     const tokenAccount = await getAssociatedTokenAddress(
       tokenMintAddress,
@@ -798,13 +682,11 @@ export async function newSell(
       { pubkey: ASSOCIATED_BONDING_CURVE, isSigner: false, isWritable: true },
       { pubkey: ASSOCIATED_USER, isSigner: false, isWritable: true },
       { pubkey: USER, isSigner: true, isWritable: true },
-      // { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       {
         pubkey: new PublicKey(SYSTEM_PROGRAM),
         isSigner: false,
         isWritable: false,
       },
-      // { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       {
         pubkey: new PublicKey(ASSOC_TOKEN_ACC_PROG),
         isSigner: false,
@@ -922,7 +804,7 @@ export async function newSell(
       `Transaction Successfully Confirmed! View on SolScan: https://solscan.io/tx/${txid}`
     );
   } catch (err) {
-    console.error("Error in placing new sell: ", err);
+    console.error("Error in selling the token back: ", err);
   }
 }
 

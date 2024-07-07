@@ -18,8 +18,6 @@ import {
   getTokenBalance,
   getWalletBalance,
   getWalletsFromFile,
-  newBuy,
-  newSell,
   placeBuyTrade,
   placeSellTrade,
   sendSolToWallet,
@@ -55,16 +53,16 @@ async function beginBuying(
 ) {
   try {
     // If it's initial phase of buying, send random SOLs from main wallet to generated wallets respectively
-    // if (!resuming) {
-    //   for (let index = 0; index < wallets.length; index++) {
-    //     await sendSolToWallet(
-    //       PRIVATE_KEY,
-    //       new PublicKey(wallets[index].publicKey),
-    //       amounts[index]
-    //     );
-    //     await waitSeconds(10);
-    //   }
-    // }
+    if (!resuming) {
+      for (let index = 0; index < wallets.length; index++) {
+        await sendSolToWallet(
+          PRIVATE_KEY,
+          new PublicKey(wallets[index].publicKey),
+          amounts[index]
+        );
+        await waitSeconds(10);
+      }
+    }
 
     let prevTransaction = ""; // To check if the last transaction is made by you, not someone else
     let index = 0;
@@ -96,19 +94,14 @@ async function beginBuying(
       if (allowedBalance > 0) {
         const amount =
           (allowedBalance / 2) * LAMPORTS_PER_SOL * (1 - PLATFORM_FEE); // subtract 2 time transfer fee: 15000 * 2
-        
-        const txid = await newBuy(
+
+        const txid = await placeBuyTrade(
           TOKEN_MINT,
           wallets[index].privateKey,
           Math.round(amount) / LAMPORTS_PER_SOL
         );
-        // const txid = await placeBuyTrade(
-        //   TOKEN_MINT,
-        //   wallets[index].privateKey,
-        //   Math.round(amount) / LAMPORTS_PER_SOL
-        // );
-        // prevTransaction = txid ? txid : prevTransaction;
-        // await waitSeconds(10);
+        prevTransaction = txid ? txid : prevTransaction;
+        await waitSeconds(10);
       }
     }
 
@@ -163,13 +156,7 @@ async function beginSelling(wallets: WalletInfoType[]) {
       new PublicKey(TOKEN_MINT)
     );
     if (tokenBalance) {
-      // await placeSellTrade(
-      //   // owner,
-      //   TOKEN_MINT,
-      //   wallets[0].privateKey,
-      //   tokenBalance
-      // );
-      await newSell(
+      await placeSellTrade(
         // owner,
         TOKEN_MINT,
         wallets[0].privateKey,
@@ -233,23 +220,22 @@ async function main() {
       if (wallets.length > 0) {
         console.log("Beginning buying process...");
 
-        // const amounts = generateRandomAmounts(wallets.length);
+        const amounts = generateRandomAmounts(wallets.length);
 
-        // const mainWalletBalance = await getWalletBalance(
-        //   owner.publicKey.toString()
-        // );
-        // const neededBalance = amounts.reduce(
-        //   (sum, currentVal) => sum + currentVal,
-        //   0
-        // );
+        const mainWalletBalance = await getWalletBalance(
+          owner.publicKey.toString()
+        );
+        const neededBalance = amounts.reduce(
+          (sum, currentVal) => sum + currentVal,
+          0
+        );
 
-        // // Check if the main wallet has enough SOL balance to send to all generated wallets
-        // if (neededBalance + SOL_RENT > mainWalletBalance) {
-        //   console.error("Insufficient balance in the main wallet.");
-        //   break;
-        // }
+        // Check if the main wallet has enough SOL balance to send to all generated wallets
+        if (neededBalance + SOL_RENT > mainWalletBalance) {
+          console.error("Insufficient balance in the main wallet.");
+          break;
+        }
 
-        const amounts = [0.005];
         await beginBuying(wallets, amounts, false);
       } else {
         console.log("No wallet exist.");
