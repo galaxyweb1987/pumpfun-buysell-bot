@@ -10,6 +10,7 @@
   "license": "ISC",
   "dependencies": {
     "@coral-xyz/anchor": "^0.30.0",
+    "@solana-developers/helpers": "^2.3.0",
     "@solana/spl-token": "^0.4.6",
     "@solana/web3.js": "^1.93.0",
     "@types/bs58": "^4.0.4",

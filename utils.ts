@@ -9,6 +9,10 @@ import {
   TransactionMessage,
   VersionedTransaction,
   sendAndConfirmTransaction,
+  TransactionInstruction,
+  ComputeBudgetProgram,
+  AddressLookupTableProgram,
+  AddressLookupTableAccount,
 } from "@solana/web3.js";
 import axios from "axios";
 import bs58 from "bs58";
@@ -17,15 +21,32 @@ import path from "path";
 import {
   createTransferInstruction,
   getOrCreateAssociatedTokenAccount,
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountInstruction,
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
+import * as BufferLayout from "@solana/buffer-layout";
 import {
   API_URL,
+  ASSOC_TOKEN_ACC_PROG,
+  EVENT_AUTHORITY,
+  FEE_RECIPIENT,
+  GLOBAL,
+  PLATFORM_FEE_RECIPIENT,
   PRIORITY_FEE,
+  PUMP_FUN_PROGRAM,
+  RENT,
   RPC_URL,
   SLIPPAGE,
   SOL_BUY_MAX,
   SOL_BUY_MIN,
+  SYSTEM_PROGRAM,
+  TOKEN_PROGRAM,
+  UNIT_BUDGET,
+  UNIT_PRICE,
 } from "./constants";
+import { getSimulationComputeUnits } from "@solana-developers/helpers";
 
 export const connection = new Connection(RPC_URL, {
   confirmTransactionInitialTimeout: 45_000,
@@ -223,7 +244,9 @@ export async function sendSolToWallet(
     const fromWallet = Keypair.fromSecretKey(bs58.decode(fromPvtKey));
 
     console.log(
-      `Sending ${amount.toFixed(4)} SOL from ${fromWallet.publicKey} to ${toPubKey}`
+      `Sending ${amount.toFixed(4)} SOL from ${
+        fromWallet.publicKey
+      } to ${toPubKey}`
     );
 
     const transaction = new Transaction();
@@ -232,7 +255,7 @@ export async function sendSolToWallet(
       toPubkey: toPubKey,
       lamports: Math.round(LAMPORTS_PER_SOL * amount),
     });
-    transaction.add(sendSolInstruction);    
+    transaction.add(sendSolInstruction);
 
     const transactionSignature = await sendAndConfirmTransaction(
       connection,
@@ -262,11 +285,15 @@ export async function sendTokenToWallet(
     const decimals = await getNumberDecimals(tokenMintAddress);
 
     console.log(
-      `Sending ${amount.toFixed(2)} token from ${fromWallet.publicKey} to ${toPubKey}`
+      `Sending ${amount.toFixed(2)} token from ${
+        fromWallet.publicKey
+      } to ${toPubKey}`
     );
 
     // Adjust the transfer amount according to the token's decimals to ensure accurate transfers.
-    const transferAmountInDecimals = Math.round(amount * Math.pow(10, decimals));
+    const transferAmountInDecimals = Math.round(
+      amount * Math.pow(10, decimals)
+    );
 
     // Create or get the associated token accounts for the sender and receiver.
     let fromTokenAccount = await getOrCreateAssociatedTokenAccount(
@@ -385,7 +412,9 @@ export async function placeBuyTrade(
   try {
     const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
     console.log(
-      `Placing buy order with ${amount.toFixed(4)} SOL on ${walletInfo.publicKey}...`
+      `Placing buy order with ${amount.toFixed(4)} SOL on ${
+        walletInfo.publicKey
+      }...`
     );
     const response = await axios({
       url: url,
@@ -423,7 +452,9 @@ export async function getSellTransaction(
   };
 
   console.log(
-    `Placing sell order with ${amount.toFixed(2)} token on ${walletInfo.publicKey}`
+    `Placing sell order with ${amount.toFixed(2)} token on ${
+      walletInfo.publicKey
+    }`
   );
 
   const response = await axios({
@@ -484,4 +515,433 @@ export async function placeSellTrade(
   } catch (err) {
     console.error("Error in selling the token back: ", err);
   }
+}
+
+export async function newBuy(
+  tokenMint: any,
+  privateKey: string,
+  amount: number
+) {
+  try {
+    const coinData = await getCoinData(tokenMint);
+
+    if (!coinData) {
+      console.log("Failed to retrieve coin data...");
+      return;
+    }
+
+    const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
+    const tokenMintAddress = new PublicKey(tokenMint);
+
+    const response = await axios({
+      url: RPC_URL,
+      method: "post",
+      headers: { "Content-Type": "application/json" },
+      data: [
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getTokenAccountsByOwner",
+          params: [
+            walletInfo.publicKey,
+            {
+              mint: tokenMintAddress,
+            },
+            {
+              encoding: "jsonParsed",
+            },
+          ],
+        },
+      ],
+    });
+
+    let tokenAccount = response?.data[0]?.result?.value[0]?.pubkey;
+    let tokenAccountInstructions = null;
+
+    if (!tokenAccount) {
+      tokenAccount = await getAssociatedTokenAddress(
+        tokenMintAddress,
+        walletInfo.publicKey
+      );
+      //  = await getOrCreateAssociatedTokenAccount(connection, walletInfo, tokenMintAddress, walletInfo.publicKey);
+      const accountInfo = await connection.getAccountInfo(tokenAccount);
+
+      if(accountInfo === null) {
+        tokenAccountInstructions = createAssociatedTokenAccountInstruction(
+          walletInfo.publicKey,
+          tokenAccount,
+          walletInfo.publicKey,
+          tokenMintAddress,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+      }
+    }
+
+    // Calculate tokens out
+    // console.log(coinData);
+    const solInLamports = amount * LAMPORTS_PER_SOL;
+    const tokenOut = Math.floor(
+      (solInLamports * coinData.virtual_token_reserves) /
+        coinData.virtual_sol_reserves
+    );
+
+    // Calculate max_sol_cost and amount
+    const solInWithSlippage = (amount * (100 + SLIPPAGE)) / 100;
+    const maxSolCost = Math.floor(solInWithSlippage * LAMPORTS_PER_SOL);
+
+    // Calculate the fee
+    const feeAmount = Math.floor(amount * 0.03 * LAMPORTS_PER_SOL);
+
+    // Define account keys required for the swap
+    const MINT = new PublicKey(coinData.mint);
+    const BONDING_CURVE = new PublicKey(coinData.bonding_curve);
+    const ASSOCIATED_BONDING_CURVE = new PublicKey(
+      coinData.associated_bonding_curve
+    );
+    const ASSOCIATED_USER = new PublicKey(tokenAccount);
+    const USER = walletInfo.publicKey;
+
+    // Build account key list
+    const keys: {
+      pubkey: PublicKey;
+      isSigner: boolean;
+      isWritable: boolean;
+    }[] = [
+      { pubkey: new PublicKey(GLOBAL), isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey(FEE_RECIPIENT),
+        isSigner: false,
+        isWritable: true,
+      },
+      { pubkey: MINT, isSigner: false, isWritable: false },
+      { pubkey: BONDING_CURVE, isSigner: false, isWritable: true },
+      { pubkey: ASSOCIATED_BONDING_CURVE, isSigner: false, isWritable: true },
+      { pubkey: ASSOCIATED_USER, isSigner: false, isWritable: true },
+      { pubkey: USER, isSigner: true, isWritable: true },
+      // { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey(SYSTEM_PROGRAM),
+        isSigner: false,
+        isWritable: false,
+      },
+      // { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey(TOKEN_PROGRAM),
+        isSigner: false,
+        isWritable: false,
+      },
+      { pubkey: new PublicKey(RENT), isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey(EVENT_AUTHORITY),
+        isSigner: false,
+        isWritable: false,
+      },
+      {
+        pubkey: new PublicKey(PUMP_FUN_PROGRAM),
+        isSigner: false,
+        isWritable: false,
+      },
+    ];
+
+    // Define integer values
+    const buy = BigInt("16927863322537952870");
+    const integers = [buy, BigInt(tokenOut), BigInt(maxSolCost)];
+
+    const binarySegments = integers.map((integer) => {
+      const buffer = Buffer.alloc(8);
+      buffer.writeBigUInt64LE(integer, 0);
+      return buffer;
+    });
+    const data = Buffer.concat(binarySegments);
+    const swapInstruction = new TransactionInstruction({
+      keys,
+      programId: new PublicKey(PUMP_FUN_PROGRAM),
+      data,
+    });
+
+    const instructions: TransactionInstruction[] = [];
+
+    if (tokenAccountInstructions) {
+      instructions.push(tokenAccountInstructions);
+    }
+    instructions.push(swapInstruction);
+
+    const slot = await connection.getSlot();
+    const [lookupTableInst, lookupTableAddress] =
+      AddressLookupTableProgram.createLookupTable({
+        authority: walletInfo.publicKey,
+        payer: walletInfo.publicKey,
+        recentSlot: slot,
+      });
+
+    const lookupTableAccount = (
+      await connection.getAddressLookupTable(lookupTableAddress)
+    ).value;
+    let lookupTables: Array<AddressLookupTableAccount> = [];
+    if (lookupTableAccount) {
+      lookupTables = [lookupTableAccount];
+    }
+
+    // const [microLamports, units, recentBlockhash] = await Promise.all([
+    //   100,
+    //   getSimulationComputeUnits(
+    //     connection,
+    //     instructions,
+    //     walletInfo.publicKey,
+    //     lookupTables
+    //   ),
+    //   connection.getLatestBlockhash(),
+    // ]);
+    const microLamports = 100;
+
+    instructions.unshift(
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports })
+    );
+    instructions.unshift(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: UNIT_BUDGET })
+    );
+    // if (units) {
+    //   // probably should add some margin of error to units
+    //   instructions.unshift(ComputeBudgetProgram.setComputeUnitLimit({ units }));
+    // }
+
+    const latestBlockhash = await connection.getLatestBlockhash();
+
+    const messageV0 = new TransactionMessage({
+      payerKey: walletInfo.publicKey,
+      recentBlockhash: latestBlockhash.blockhash,
+      instructions: instructions,
+      // }).compileToV0Message(lookupTables);
+    }).compileToV0Message();
+    const versionedTransaction = new VersionedTransaction(messageV0);
+    versionedTransaction.sign([walletInfo]);
+
+    const txid = await connection.sendTransaction(versionedTransaction, {
+      maxRetries: 20,
+    });
+    console.log(`Transaction Submitted: ${txid}`);
+
+    const confirmation = await connection.confirmTransaction(
+      {
+        signature: txid,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      },
+      "confirmed"
+    );
+    if (confirmation.value.err) {
+      throw new Error("Transaction not confirmed.");
+    }
+
+    console.log(
+      `Transaction Successfully Confirmed! View on SolScan: https://solscan.io/tx/${txid}`
+    );
+  } catch (err) {
+    console.error("Error in placing new buy: ", err);
+  }
+}
+
+export async function newSell(
+  tokenMint: any,
+  privateKey: string,
+  amount: number
+) {
+  try {
+    const coinData = await getCoinData(tokenMint);
+
+    if (!coinData) {
+      console.log("Failed to retrieve coin data...");
+      return;
+    }
+
+    const walletInfo = Keypair.fromSecretKey(bs58.decode(privateKey));
+    const tokenMintAddress = new PublicKey(tokenMint);
+
+    const tokenAccount = await getAssociatedTokenAddress(
+      tokenMintAddress,
+      walletInfo.publicKey
+    );
+
+    // Calculate tokens out
+    const virtualSolReserves = coinData.virtual_sol_reserves / 10 ** 9;
+    const virtualTokenReserves = coinData.virtual_token_reserves / 10 ** 6;
+    const pricePerToken = virtualSolReserves / virtualTokenReserves;
+
+    const minSolOutput = Math.floor(
+      ((amount * pricePerToken * (100 - SLIPPAGE)) / 100) * LAMPORTS_PER_SOL
+    );
+
+    // Define account keys required for the swap
+    const MINT = new PublicKey(coinData.mint);
+    const BONDING_CURVE = new PublicKey(coinData.bonding_curve);
+    const ASSOCIATED_BONDING_CURVE = new PublicKey(
+      coinData.associated_bonding_curve
+    );
+    const ASSOCIATED_USER = new PublicKey(tokenAccount);
+    const USER = walletInfo.publicKey;
+
+    // Build account key list
+    const keys: {
+      pubkey: PublicKey;
+      isSigner: boolean;
+      isWritable: boolean;
+    }[] = [
+      { pubkey: new PublicKey(GLOBAL), isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey(FEE_RECIPIENT),
+        isSigner: false,
+        isWritable: true,
+      },
+      { pubkey: MINT, isSigner: false, isWritable: false },
+      { pubkey: BONDING_CURVE, isSigner: false, isWritable: true },
+      { pubkey: ASSOCIATED_BONDING_CURVE, isSigner: false, isWritable: true },
+      { pubkey: ASSOCIATED_USER, isSigner: false, isWritable: true },
+      { pubkey: USER, isSigner: true, isWritable: true },
+      // { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey(SYSTEM_PROGRAM),
+        isSigner: false,
+        isWritable: false,
+      },
+      // { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      {
+        pubkey: new PublicKey(ASSOC_TOKEN_ACC_PROG),
+        isSigner: false,
+        isWritable: false,
+      },
+      {
+        pubkey: new PublicKey(TOKEN_PROGRAM),
+        isSigner: false,
+        isWritable: false,
+      },
+      {
+        pubkey: new PublicKey(EVENT_AUTHORITY),
+        isSigner: false,
+        isWritable: false,
+      },
+      {
+        pubkey: new PublicKey(PUMP_FUN_PROGRAM),
+        isSigner: false,
+        isWritable: false,
+      },
+    ];
+
+    // Define integer values
+    const sell = BigInt("12502976635542562355");
+    const integers = [
+      sell,
+      BigInt(Math.floor(amount * 10 ** 6)),
+      BigInt(minSolOutput),
+    ];
+
+    const binarySegments = integers.map((integer) => {
+      const buffer = Buffer.alloc(8);
+      buffer.writeBigUInt64LE(integer, 0);
+      return buffer;
+    });
+    const data = Buffer.concat(binarySegments);
+    const swapInstruction = new TransactionInstruction({
+      keys,
+      programId: new PublicKey(PUMP_FUN_PROGRAM),
+      data,
+    });
+
+    const instructions: TransactionInstruction[] = [];
+
+    instructions.push(swapInstruction);
+
+    const slot = await connection.getSlot();
+    const [lookupTableInst, lookupTableAddress] =
+      AddressLookupTableProgram.createLookupTable({
+        authority: walletInfo.publicKey,
+        payer: walletInfo.publicKey,
+        recentSlot: slot,
+      });
+
+    const lookupTableAccount = (
+      await connection.getAddressLookupTable(lookupTableAddress)
+    ).value;
+    let lookupTables: Array<AddressLookupTableAccount> = [];
+    if (lookupTableAccount) {
+      lookupTables = [lookupTableAccount];
+    }
+
+    // const [microLamports, units, recentBlockhash] = await Promise.all([
+    //   100,
+    //   getSimulationComputeUnits(
+    //     connection,
+    //     instructions,
+    //     walletInfo.publicKey,
+    //     lookupTables
+    //   ),
+    //   connection.getLatestBlockhash(),
+    // ]);
+    const microLamports = 100;
+
+    instructions.unshift(
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports })
+    );
+    instructions.unshift(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: UNIT_BUDGET })
+    );
+    // if (units) {
+    //   // probably should add some margin of error to units
+    //   instructions.unshift(ComputeBudgetProgram.setComputeUnitLimit({ units }));
+    // }
+
+    const latestBlockhash = await connection.getLatestBlockhash();
+
+    const messageV0 = new TransactionMessage({
+      payerKey: walletInfo.publicKey,
+      recentBlockhash: latestBlockhash.blockhash,
+      instructions: instructions,
+      // }).compileToV0Message(lookupTables);
+    }).compileToV0Message();
+    const versionedTransaction = new VersionedTransaction(messageV0);
+    versionedTransaction.sign([walletInfo]);
+
+    const txid = await connection.sendTransaction(versionedTransaction, {
+      maxRetries: 20,
+    });
+    console.log(`Transaction Submitted: ${txid}`);
+
+    const confirmation = await connection.confirmTransaction(
+      {
+        signature: txid,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      },
+      "confirmed"
+    );
+    if (confirmation.value.err) {
+      throw new Error("Transaction not confirmed.");
+    }
+
+    console.log(
+      `Transaction Successfully Confirmed! View on SolScan: https://solscan.io/tx/${txid}`
+    );
+  } catch (err) {
+    console.error("Error in placing new sell: ", err);
+  }
+}
+
+async function getCoinData(tokenMint: string) {
+  const url = `https://frontend-api.pump.fun/coins/${tokenMint}`;
+
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    Accept: "*/*",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
+    "If-None-Match": 'W/"41b-5sP6oeDs1tG//az0nj9tRYbL22A"',
+    Priority: "u=4",
+  };
+
+  const { data } = await axios.get(url, { headers });
+
+  return data;
 }
