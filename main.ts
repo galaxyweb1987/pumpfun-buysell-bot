@@ -3,7 +3,6 @@ import bs58 from "bs58";
 import prompts from "prompts";
 import {
   PAUSE_ON_INTERRUPTION,
-  PLATFORM_FEE,
   PRIVATE_KEY,
   SOL_RENT,
   TOKEN_MINT,
@@ -92,8 +91,7 @@ async function beginBuying(
       const balance = await getWalletBalance(wallets[index].publicKey);
       const allowedBalance = balance - SOL_RENT;
       if (allowedBalance > 0) {
-        const amount =
-          (allowedBalance / 2) * LAMPORTS_PER_SOL * (1 - PLATFORM_FEE); // subtract 2 time transfer fee: 15000 * 2
+        const amount = (allowedBalance / 2) * LAMPORTS_PER_SOL; // subtract 2 time transfer fee: 15000 * 2
 
         const txid = await placeBuyTrade(
           TOKEN_MINT,
@@ -156,12 +154,7 @@ async function beginSelling(wallets: WalletInfoType[]) {
       new PublicKey(TOKEN_MINT)
     );
     if (tokenBalance) {
-      await placeSellTrade(
-        // owner,
-        TOKEN_MINT,
-        wallets[0].privateKey,
-        tokenBalance
-      );
+      await placeSellTrade(TOKEN_MINT, wallets[0].privateKey, tokenBalance);
     } else {
       console.log(
         `There is no token available to swap with SOL on ${wallets[0].publicKey}`
@@ -169,7 +162,7 @@ async function beginSelling(wallets: WalletInfoType[]) {
     }
 
     // Send all available SOL from the first generated wallet to the main wallet
-    await waitSeconds(20);
+    await waitSeconds(10);
     const solBalance = await getWalletBalance(wallets[0].publicKey);
     const amount = solBalance - SOL_RENT;
     if (amount > 0) {

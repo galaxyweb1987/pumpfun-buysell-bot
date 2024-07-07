@@ -32,8 +32,6 @@ import {
   EVENT_AUTHORITY,
   FEE_RECIPIENT,
   GLOBAL,
-  PLATFORM_FEE_RECIPIENT,
-  PRIORITY_FEE,
   PUMP_FUN_PROGRAM,
   RENT,
   RPC_URL,
@@ -127,31 +125,8 @@ export async function getTokenBalance(
   tokenMintAddress: PublicKey
 ) {
   try {
-    const response = await axios({
-      url: RPC_URL,
-      method: "post",
-      headers: { "Content-Type": "application/json" },
-      data: [
-        {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getTokenAccountsByOwner",
-          params: [
-            walletAddress,
-            {
-              mint: tokenMintAddress,
-            },
-            {
-              encoding: "jsonParsed",
-            },
-          ],
-        },
-      ],
-    });
-
-    const tokenAmount =
-      response?.data[0]?.result?.value[0]?.account?.data?.parsed?.info
-        ?.tokenAmount;
+    const tokenAccount = await getTokenAccount(walletAddress, tokenMintAddress);
+    const tokenAmount = tokenAccount?.account?.data?.parsed?.info?.tokenAmount;
     return tokenAmount ? tokenAmount.uiAmount : 0;
   } catch (err) {
     console.error("Error in getting token balance:", err);
@@ -416,29 +391,12 @@ export async function placeBuyTrade(
     );
 
     // Get token account and generate related instruction
-    const response = await axios({
-      url: RPC_URL,
-      method: "post",
-      headers: { "Content-Type": "application/json" },
-      data: [
-        {
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getTokenAccountsByOwner",
-          params: [
-            walletInfo.publicKey,
-            {
-              mint: tokenMintAddress,
-            },
-            {
-              encoding: "jsonParsed",
-            },
-          ],
-        },
-      ],
-    });
+    const tokenAccountInfo = await getTokenAccount(
+      walletInfo.publicKey,
+      tokenMintAddress
+    );
 
-    let tokenAccount = response?.data[0]?.result?.value[0]?.pubkey;
+    let tokenAccount = tokenAccountInfo?.pubkey;
     let tokenAccountInstructions = null;
 
     if (!tokenAccount) {
@@ -559,28 +517,24 @@ export async function placeBuyTrade(
       lookupTables = [lookupTableAccount];
     }
 
-    // const [microLamports, units, recentBlockhash] = await Promise.all([
-    //   100,
-    //   getSimulationComputeUnits(
-    //     connection,
-    //     instructions,
-    //     walletInfo.publicKey,
-    //     lookupTables
-    //   ),
-    //   connection.getLatestBlockhash(),
-    // ]);
     const microLamports = 100;
+    const units = await getSimulationComputeUnits(
+      connection,
+      instructions,
+      walletInfo.publicKey,
+      lookupTables
+    );
 
     instructions.unshift(
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports })
     );
-    instructions.unshift(
-      ComputeBudgetProgram.setComputeUnitLimit({ units: UNIT_BUDGET })
-    );
-    // if (units) {
-    //   // probably should add some margin of error to units
-    //   instructions.unshift(ComputeBudgetProgram.setComputeUnitLimit({ units }));
-    // }
+    if (units) {
+      instructions.unshift(
+        ComputeBudgetProgram.setComputeUnitLimit({
+          units: units ? units * 1.5 : UNIT_BUDGET,
+        })
+      );
+    }
 
     const latestBlockhash = await connection.getLatestBlockhash();
 
@@ -588,8 +542,7 @@ export async function placeBuyTrade(
       payerKey: walletInfo.publicKey,
       recentBlockhash: latestBlockhash.blockhash,
       instructions: instructions,
-      // }).compileToV0Message(lookupTables);
-    }).compileToV0Message();
+    }).compileToV0Message(lookupTables);
     const versionedTransaction = new VersionedTransaction(messageV0);
     versionedTransaction.sign([walletInfo]);
 
@@ -749,28 +702,24 @@ export async function placeSellTrade(
       lookupTables = [lookupTableAccount];
     }
 
-    // const [microLamports, units, recentBlockhash] = await Promise.all([
-    //   100,
-    //   getSimulationComputeUnits(
-    //     connection,
-    //     instructions,
-    //     walletInfo.publicKey,
-    //     lookupTables
-    //   ),
-    //   connection.getLatestBlockhash(),
-    // ]);
     const microLamports = 100;
+    const units = await getSimulationComputeUnits(
+      connection,
+      instructions,
+      walletInfo.publicKey,
+      lookupTables
+    );
 
     instructions.unshift(
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports })
     );
-    instructions.unshift(
-      ComputeBudgetProgram.setComputeUnitLimit({ units: UNIT_BUDGET })
-    );
-    // if (units) {
-    //   // probably should add some margin of error to units
-    //   instructions.unshift(ComputeBudgetProgram.setComputeUnitLimit({ units }));
-    // }
+    if (units) {
+      instructions.unshift(
+        ComputeBudgetProgram.setComputeUnitLimit({
+          units: units ? units * 1.5 : UNIT_BUDGET,
+        })
+      );
+    }
 
     const latestBlockhash = await connection.getLatestBlockhash();
 
@@ -778,8 +727,7 @@ export async function placeSellTrade(
       payerKey: walletInfo.publicKey,
       recentBlockhash: latestBlockhash.blockhash,
       instructions: instructions,
-      // }).compileToV0Message(lookupTables);
-    }).compileToV0Message();
+    }).compileToV0Message(lookupTables);
     const versionedTransaction = new VersionedTransaction(messageV0);
     versionedTransaction.sign([walletInfo]);
 
@@ -826,4 +774,33 @@ async function getCoinData(tokenMint: string) {
   const { data } = await axios.get(url, { headers });
 
   return data;
+}
+
+async function getTokenAccount(
+  walletAddress: PublicKey,
+  tokenMintAddress: PublicKey
+) {
+  const response = await axios({
+    url: RPC_URL,
+    method: "post",
+    headers: { "Content-Type": "application/json" },
+    data: [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getTokenAccountsByOwner",
+        params: [
+          walletAddress,
+          {
+            mint: tokenMintAddress,
+          },
+          {
+            encoding: "jsonParsed",
+          },
+        ],
+      },
+    ],
+  });
+
+  return response?.data[0]?.result?.value[0];
 }
